@@ -83,27 +83,33 @@ std::vector<BYTE> ShellcodeBuilder::BuildHookShellcode(const ShellcodeConfig& co
     };
 
     if (enableStackSpoofing) {
-        // 将关键寄存器暂存到真实栈，再切换到对齐后的伪栈
+        // 先把会被临时占用的寄存器保存到真实栈
+        code.push(code.rsi); // 保存原始 rsi
+        code.push(code.rdx); // 保存原始 rdx
         code.push(code.rax); // 保存原始 rax
         code.push(code.r10); // 保存原始 r10
         code.push(code.r11); // 保存原始 r11
 
-        // rsp + 24 对应切换前的真实栈指针
-        code.lea(code.rax, code.ptr[code.rsp + 24]); // rax = original rsp
+        // 计算切换前的真实 RSP
+        code.lea(code.rcx, code.ptr[code.rsp + 5 * 8]); // rcx = original rsp
 
         // 切换到伪栈（对齐到16字节），预留一定空间
         code.mov(code.rsp, spoofStackAligned);
         code.sub(code.rsp, 0x20);
 
         // 将真实 RSP 存到伪栈，并构造一个假的返回地址槽位
-        code.push(code.rax);                        // [rsp] = original rsp
-        code.mov(code.rax, (uint64_t)config.trampolineAddress); // 伪造返回地址指向 trampoline
-        code.push(code.rax);
+        code.push(code.rcx);                        // [rsp] = original rsp
+        code.mov(code.rdx, (uint64_t)config.trampolineAddress); // 伪造返回地址指向 trampoline
+        code.push(code.rdx);
 
-        // 恢复 r11/r10/rax 的原始值，确保后续保存寄存器时是原值
-        code.mov(code.r11, code.qword[code.rax - 24]);
-        code.mov(code.r10, code.qword[code.rax - 16]);
-        code.mov(code.rax, code.qword[code.rax - 8]);
+        // 从原始栈帧恢复被暂存的寄存器值，确保后续保存的是进入时的原始寄存器状态
+        code.mov(code.rsi, code.rcx); // rsi = original rsp
+        code.sub(code.rsi, 5 * 8);    // rsi -> 保存区域起点
+        code.mov(code.r11, code.qword[code.rsi + 0]);   // 原始 r11
+        code.mov(code.r10, code.qword[code.rsi + 8]);   // 原始 r10
+        code.mov(code.rax, code.qword[code.rsi + 16]);  // 原始 rax
+        code.mov(code.rdx, code.qword[code.rsi + 24]);  // 原始 rdx
+        code.mov(code.rsi, code.qword[code.rsi + 32]);  // 原始 rsi
     }
 
     // ===== 保存寄存器/标志位 =====
